@@ -2,8 +2,8 @@ const P = 2n ** 255n - 19n
 const N = 2n ** 252n + 27742317777372353535851937790883648493n
 const D = mod(-121665n * modInverse(121666n))
 
-const Gx = 15112221349535807912866137220509078750507884956996801397970088037519608547828n
-const Gy = 46316835694926478169428394003475163141307993866256225615783033890098355573649n
+const Gx = 15112221349535400772501151409588531511454012693041857206046113283949847762202n
+const Gy = 46316835694926478169428394003475163141307993866256225615783033603165251855960n
 const G = [Gx, Gy, 1n, mod(Gx * Gy)]
 const IDENTITY = [0n, 1n, 1n, 0n]
 
@@ -115,6 +115,12 @@ function b64ToBytes(b64) {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
 }
 
+function hexToBytes(hex) {
+  if (hex.startsWith('0x')) hex = hex.slice(2)
+  if (hex.length % 2 !== 0) throw new Error('Invalid hex string')
+  return Uint8Array.from(hex.match(/.{2}/g) || [], (byte) => parseInt(byte, 16))
+}
+
 async function decryptWithPassword(encryptedB64, password, saltB64, ivB64, iterations) {
   const keyMaterial = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
@@ -196,12 +202,14 @@ async function reconstruct() {
   try {
     const walletFile = files.find((f) => f.data.type === 'oath-wallet-recovery')
     let secretBytes
+    let expectedAddress
 
     if (walletFile) {
       const password = document.getElementById('passwordInput').value
       if (!password) { showError('Enter your recovery password.'); return }
       const d = walletFile.data
       secretBytes = await decryptWithPassword(d.encrypted_key, password, d.kdf_params.salt, d.iv, d.kdf_params.iterations)
+      expectedAddress = d.address
     } else {
       const shares = files.filter((f) => f.data.type === 'oath-escrow-share').map((f) => f.data)
       if (new Set(shares.map((s) => s.group_public_key)).size > 1) {
@@ -209,9 +217,15 @@ async function reconstruct() {
         return
       }
       secretBytes = bigintToBytes(reconstructFromShares(shares))
+      expectedAddress = base58Encode(hexToBytes(shares[0].group_public_key))
     }
 
+    if (secretBytes.length !== 32) throw new Error(`Expected a 32-byte private key, got ${secretBytes.length} bytes`)
     const { address, secret } = scalarToKeypair(secretBytes)
+    if (address !== expectedAddress) {
+      secretBytes.fill(0)
+      throw new Error('Recovered key does not match the address in the recovery file.')
+    }
     document.getElementById('resultAddress').textContent = address
     document.getElementById('resultKey').textContent = secret
     document.getElementById('result').style.display = 'block'
